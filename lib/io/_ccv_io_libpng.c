@@ -42,6 +42,7 @@ static void _ccv_read_png_fd(FILE* in, ccv_dense_matrix_t** x, int type)
 
 static void _ccv_write_png_fd(ccv_dense_matrix_t* mat, FILE* fd, void* conf)
 {
+	assert(CCV_GET_DATA_TYPE(mat->type) == CCV_8U && (CCV_GET_CHANNEL(mat->type) == CCV_C1 || CCV_GET_CHANNEL(mat->type) == CCV_C3));
 	png_structp png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, 0, 0, 0);
 	png_infop info_ptr = png_create_info_struct(png_ptr);
 	if (setjmp(png_jmpbuf(png_ptr)))
