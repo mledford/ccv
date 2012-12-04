@@ -155,6 +155,8 @@ TEST_CASE("compress sparse matrix")
 	ccv_matrix_free(csm);
 }
 
+#ifdef HAVE_LIBPNG
+
 TEST_CASE("matrix slice")
 {
 	ccv_dense_matrix_t* image = 0;
@@ -165,6 +167,8 @@ TEST_CASE("matrix slice")
 	ccv_matrix_free(image);
 	ccv_matrix_free(b);
 }
+
+#endif
 
 TEST_CASE("matrix flatten")
 {

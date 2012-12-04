@@ -2,6 +2,8 @@
 #include "case.h"
 #include "ccv_case.h"
 
+#ifdef HAVE_LIBPNG
+
 TEST_CASE("sobel operation")
 {
 	ccv_dense_matrix_t* image = 0;
@@ -106,6 +108,8 @@ TEST_CASE("canny edge detector")
 	ccv_matrix_free(image);
 	ccv_matrix_free(x);
 }
+
+#endif
 
 TEST_CASE("otsu threshold")
 {
