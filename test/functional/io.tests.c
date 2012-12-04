@@ -357,6 +357,8 @@ TEST_CASE("read JPEG from memory")
 
 #endif
 
+#ifdef HAVE_LIBPNG
+
 TEST_CASE("read PNG from memory")
 {
 	ccv_dense_matrix_t* x = 0;
@@ -375,5 +377,7 @@ TEST_CASE("read PNG from memory")
 	ccv_matrix_free(y);
 	ccv_matrix_free(x);
 }
+
+#endif
 
 #include "case_main.h"

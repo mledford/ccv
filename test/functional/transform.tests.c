@@ -2,6 +2,8 @@
 #include "case.h"
 #include "ccv_case.h"
 
+#ifdef HAVE_LIBPNG
+
 TEST_CASE("matrix decimal slice")
 {
 	ccv_dense_matrix_t* image = 0;
@@ -23,5 +25,7 @@ TEST_CASE("matrix perspective transform")
 	ccv_matrix_free(image);
 	ccv_matrix_free(b);
 }
+
+#endif
 
 #include "case_main.h"
