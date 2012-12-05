@@ -2,16 +2,9 @@
 #include "ccv_internal.h"
 #include "3rdparty/sha1/sha1.h"
 
-#ifdef __APPLE__
-#include "TargetConditionals.h"
-#if (TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
-// Temporary fix: __thread is not supported on iOS so define it to nothing.
-#define __thread
-#endif
-#endif
+static pthread_rwlock_t ccv_cache_rwlock = PTHREAD_RWLOCK_INITIALIZER;
 
-
-static __thread ccv_cache_t ccv_cache;
+static ccv_cache_t ccv_cache = { NULL };
 
 /**
  * For new typed cache object:
@@ -20,11 +13,13 @@ static __thread ccv_cache_t ccv_cache;
  **/
 
 /* option to enable/disable cache */
-static __thread int ccv_cache_opt = 0;
+static int ccv_cache_opt = 0;
 
 ccv_dense_matrix_t* ccv_dense_matrix_new(int rows, int cols, int type, void* data, uint64_t sig)
 {
-	ccv_dense_matrix_t* mat;
+	pthread_rwlock_rdlock(&ccv_cache_rwlock);
+	
+	ccv_dense_matrix_t* mat = NULL;
 	if (ccv_cache_opt && sig != 0 && !data && !(type & CCV_NO_DATA_ALLOC))
 	{
 		uint8_t type;
@@ -34,25 +29,30 @@ ccv_dense_matrix_t* ccv_dense_matrix_new(int rows, int cols, int type, void* dat
 			assert(type == 0);
 			mat->type |= CCV_GARBAGE; // set the flag so the upper level function knows this is from recycle-bin
 			mat->refcount = 1;
-			return mat;
 		}
 	}
-	if (type & CCV_NO_DATA_ALLOC)
-	{
-		mat = (ccv_dense_matrix_t*)ccmalloc(sizeof(ccv_dense_matrix_t));
-		mat->type = (CCV_GET_CHANNEL(type) | CCV_GET_DATA_TYPE(type) | CCV_MATRIX_DENSE | CCV_NO_DATA_ALLOC) & ~CCV_GARBAGE;
-		mat->data.u8 = data;
-	} else {
-		mat = (ccv_dense_matrix_t*)(data ? data : ccmalloc(ccv_compute_dense_matrix_size(rows, cols, type)));
-		mat->type = (CCV_GET_CHANNEL(type) | CCV_GET_DATA_TYPE(type) | CCV_MATRIX_DENSE) & ~CCV_GARBAGE;
-		mat->type |= data ? CCV_UNMANAGED : CCV_REUSABLE; // it still could be reusable because the signature could be derived one.
-		mat->data.u8 = (unsigned char*)(mat + 1);
+	
+	pthread_rwlock_unlock(&ccv_cache_rwlock);
+	
+	if (!mat) {
+		if (type & CCV_NO_DATA_ALLOC)
+		{
+			mat = (ccv_dense_matrix_t*)ccmalloc(sizeof(ccv_dense_matrix_t));
+			mat->type = (CCV_GET_CHANNEL(type) | CCV_GET_DATA_TYPE(type) | CCV_MATRIX_DENSE | CCV_NO_DATA_ALLOC) & ~CCV_GARBAGE;
+			mat->data.u8 = data;
+		} else {
+			mat = (ccv_dense_matrix_t*)(data ? data : ccmalloc(ccv_compute_dense_matrix_size(rows, cols, type)));
+			mat->type = (CCV_GET_CHANNEL(type) | CCV_GET_DATA_TYPE(type) | CCV_MATRIX_DENSE) & ~CCV_GARBAGE;
+			mat->type |= data ? CCV_UNMANAGED : CCV_REUSABLE; // it still could be reusable because the signature could be derived one.
+			mat->data.u8 = (unsigned char*)(mat + 1);
+		}
+		mat->sig = sig;
+		mat->rows = rows;
+		mat->cols = cols;
+		mat->step = (cols * CCV_GET_DATA_TYPE_SIZE(type) * CCV_GET_CHANNEL(type) + 3) & -4;
+		mat->refcount = 1;
 	}
-	mat->sig = sig;
-	mat->rows = rows;
-	mat->cols = cols;
-	mat->step = (cols * CCV_GET_DATA_TYPE_SIZE(type) * CCV_GET_CHANNEL(type) + 3) & -4;
-	mat->refcount = 1;
+	
 	return mat;
 }
 
@@ -177,6 +177,9 @@ void ccv_matrix_free(ccv_matrix_t* mat)
 	{
 		ccv_dense_matrix_t* dmt = (ccv_dense_matrix_t*)mat;
 		dmt->refcount = 0;
+		
+		pthread_rwlock_rdlock(&ccv_cache_rwlock);
+		
 		if (!ccv_cache_opt || // e don't enable cache
 			!(dmt->type & CCV_REUSABLE) || // or this is not a reusable piece
 			dmt->sig == 0 || // or this doesn't have valid signature
@@ -191,6 +194,9 @@ void ccv_matrix_free(ccv_matrix_t* mat)
 			size_t size = ccv_compute_dense_matrix_size(dmt->rows, dmt->cols, dmt->type);
 			ccv_cache_put(&ccv_cache, dmt->sig, dmt, size, 0 /* type 0 */);
 		}
+		
+		pthread_rwlock_unlock(&ccv_cache_rwlock);
+		
 	} else if (type & CCV_MATRIX_SPARSE) {
 		ccv_sparse_matrix_t* smt = (ccv_sparse_matrix_t*)mat;
 		int i;
@@ -219,7 +225,9 @@ void ccv_matrix_free(ccv_matrix_t* mat)
 
 ccv_array_t* ccv_array_new(int rsize, int rnum, uint64_t sig)
 {
-	ccv_array_t* array;
+	pthread_rwlock_rdlock(&ccv_cache_rwlock);
+	
+	ccv_array_t* array = NULL;
 	if (ccv_cache_opt && sig != 0)
 	{
 		uint8_t type;
@@ -229,16 +237,20 @@ ccv_array_t* ccv_array_new(int rsize, int rnum, uint64_t sig)
 			assert(type == 1);
 			array->type |= CCV_GARBAGE;
 			array->refcount = 1;
-			return array;
 		}
 	}
-	array = (ccv_array_t*)ccmalloc(sizeof(ccv_array_t));
-	array->sig = sig;
-	array->type = CCV_REUSABLE & ~CCV_GARBAGE;
-	array->rnum = 0;
-	array->rsize = rsize;
-	array->size = ccv_max(rnum, 2 /* allocate memory for at least 2 items */);
-	array->data = ccmalloc(array->size * rsize);
+	
+	pthread_rwlock_unlock(&ccv_cache_rwlock);
+	
+	if (!array) {
+		array = (ccv_array_t*)ccmalloc(sizeof(ccv_array_t));
+		array->sig = sig;
+		array->type = CCV_REUSABLE & ~CCV_GARBAGE;
+		array->rnum = 0;
+		array->rsize = rsize;
+		array->size = ccv_max(rnum, 2 /* allocate memory for at least 2 items */);
+		array->data = ccmalloc(array->size * rsize);		
+	}
 	return array;
 }
 
@@ -265,6 +277,8 @@ void ccv_array_free_immediately(ccv_array_t* array)
 
 void ccv_array_free(ccv_array_t* array)
 {
+	pthread_rwlock_rdlock(&ccv_cache_rwlock);
+	
 	if (!ccv_cache_opt || !(array->type & CCV_REUSABLE) || array->sig == 0)
 	{
 		array->refcount = 0;
@@ -274,24 +288,41 @@ void ccv_array_free(ccv_array_t* array)
 		size_t size = sizeof(ccv_array_t) + array->size * array->rsize;
 		ccv_cache_put(&ccv_cache, array->sig, array, size, 1 /* type 1 */);
 	}
+	
+	pthread_rwlock_unlock(&ccv_cache_rwlock);
 }
 
 void ccv_drain_cache(void)
 {
-	if (ccv_cache.rnum > 0)
-		ccv_cache_cleanup(&ccv_cache);
+	pthread_rwlock_rdlock(&ccv_cache_rwlock);
+	
+	ccv_cache_cleanup(&ccv_cache);
+	
+	pthread_rwlock_unlock(&ccv_cache_rwlock);
 }
 
 void ccv_disable_cache(void)
 {
-	ccv_cache_opt = 0;
-	ccv_cache_close(&ccv_cache);
+	pthread_rwlock_wrlock(&ccv_cache_rwlock);
+	
+	if (ccv_cache_opt) {
+		ccv_cache_opt = 0;
+		ccv_cache_close(&ccv_cache);
+	}
+	
+	pthread_rwlock_unlock(&ccv_cache_rwlock);
 }
 
 void ccv_enable_cache(size_t size)
 {
-	ccv_cache_opt = 1;
-	ccv_cache_init(&ccv_cache, size, 2, ccv_matrix_free_immediately, ccv_array_free_immediately);
+	pthread_rwlock_wrlock(&ccv_cache_rwlock);
+	
+	if (!ccv_cache_opt) {
+		ccv_cache_opt = 1;
+		ccv_cache_init(&ccv_cache, size, 2, ccv_matrix_free_immediately, ccv_array_free_immediately);		
+	}
+	
+	pthread_rwlock_unlock(&ccv_cache_rwlock);
 }
 
 void ccv_enable_default_cache(void)

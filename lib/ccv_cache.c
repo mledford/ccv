@@ -6,9 +6,14 @@
 #define CCV_GET_TERMINAL_SIZE(x) ((x) & 0xFFFFFFFF)
 #define CCV_SET_TERMINAL_TYPE(x, y, z) (((uint64_t)(x) << 60) | ((uint64_t)(y) << 32) | (z))
 
+int _ccv_cache_delete(ccv_cache_t* cache, uint64_t sign);
+
 void ccv_cache_init(ccv_cache_t* cache, size_t up, int cache_types, ccv_cache_index_free_f ffree, ...)
 {
 	assert(cache_types > 0 && cache_types <= 16);
+	assert(cache->cache_rwlock == NULL);
+	cache->cache_rwlock = malloc(sizeof(pthread_rwlock_t));
+	pthread_rwlock_init(cache->cache_rwlock, NULL);
 	cache->rnum = 0;
 	cache->age = 0;
 	cache->up = up;
@@ -142,7 +147,7 @@ static ccv_cache_index_t* _ccv_cache_seek(ccv_cache_index_t* branch, uint64_t si
 	return 0;
 }
 
-void* ccv_cache_get(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
+void* _ccv_cache_get(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
 {
 	if (cache->rnum == 0)
 		return 0;
@@ -157,6 +162,17 @@ void* ccv_cache_get(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
 	if (type)
 		*type = CCV_GET_CACHE_TYPE(branch->terminal.type);
 	return (void*)(branch->terminal.off - (branch->terminal.off & 0x3));
+}
+
+void* ccv_cache_get(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
+{
+	pthread_rwlock_wrlock(cache->cache_rwlock);
+	
+	void* return_value = _ccv_cache_get(cache, sign, type);
+	
+	pthread_rwlock_unlock(cache->cache_rwlock);
+	
+	return return_value;
 }
 
 // only call this function when the cache space is delpeted
@@ -185,7 +201,7 @@ static void _ccv_cache_lru(ccv_cache_t* cache)
 		int leaf = branch->terminal.off & 0x1;
 		if (leaf)
 		{
-			ccv_cache_delete(cache, branch->terminal.sign);
+			_ccv_cache_delete(cache, branch->terminal.sign);
 			break;
 		} else {
 			ccv_cache_index_t* set = (ccv_cache_index_t*)(branch->branch.set - (branch->branch.set & 0x3));
@@ -212,7 +228,7 @@ static void _ccv_cache_depleted(ccv_cache_t* cache, size_t size)
 		_ccv_cache_lru(cache);
 }
 
-int ccv_cache_put(ccv_cache_t* cache, uint64_t sign, void* x, uint32_t size, uint8_t type)
+int _ccv_cache_put(ccv_cache_t* cache, uint64_t sign, void* x, uint32_t size, uint8_t type)
 {
 	assert(((uint64_t)x & 0x3) == 0);
 	if (size > cache->up)
@@ -307,6 +323,17 @@ int ccv_cache_put(ccv_cache_t* cache, uint64_t sign, void* x, uint32_t size, uin
 	return 0;
 }
 
+int ccv_cache_put(ccv_cache_t* cache, uint64_t sign, void* x, uint32_t size, uint8_t type)
+{
+	pthread_rwlock_wrlock(cache->cache_rwlock);
+	
+	int return_value = _ccv_cache_put(cache, sign, x, size, type);
+	
+	pthread_rwlock_unlock(cache->cache_rwlock);
+	
+	return return_value;
+}
+
 static void _ccv_cache_cleanup(ccv_cache_index_t* branch)
 {
 	int leaf = branch->terminal.off & 0x1;
@@ -341,7 +368,7 @@ static void _ccv_cache_cleanup_and_free(ccv_cache_index_t* branch, ccv_cache_ind
 	}
 }
 
-void* ccv_cache_out(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
+void* _ccv_cache_out(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
 {
 	if (!bits_in_16bits_init)
 		precomputed_16bits();
@@ -426,10 +453,23 @@ void* ccv_cache_out(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
 	return result;
 }
 
-int ccv_cache_delete(ccv_cache_t* cache, uint64_t sign)
+void* ccv_cache_out(ccv_cache_t* cache, uint64_t sign, uint8_t* type)
 {
+	pthread_rwlock_wrlock(cache->cache_rwlock);
+	
+	void *result = _ccv_cache_out(cache, sign, type);
+	
+	pthread_rwlock_unlock(cache->cache_rwlock);
+	
+	return result;
+}
+
+int _ccv_cache_delete(ccv_cache_t* cache, uint64_t sign)
+{	
 	uint8_t type = 0;
-	void* result = ccv_cache_out(cache, sign, &type);
+		
+	void* result = _ccv_cache_out(cache, sign, &type);
+		
 	if (result != 0)
 	{
 		assert(type >= 0 && type < 16);
@@ -439,8 +479,21 @@ int ccv_cache_delete(ccv_cache_t* cache, uint64_t sign)
 	return -1;
 }
 
+int ccv_cache_delete(ccv_cache_t* cache, uint64_t sign)
+{	
+	pthread_rwlock_wrlock(cache->cache_rwlock);
+	
+	int result = _ccv_cache_delete(cache, sign);
+	
+	pthread_rwlock_unlock(cache->cache_rwlock);
+	
+	return result;
+}
+
 void ccv_cache_cleanup(ccv_cache_t* cache)
 {
+	pthread_rwlock_wrlock(cache->cache_rwlock);
+	
 	if (cache->rnum > 0)
 	{
 		_ccv_cache_cleanup_and_free(&cache->origin, cache->ffree);
@@ -449,11 +502,19 @@ void ccv_cache_cleanup(ccv_cache_t* cache)
 		cache->rnum = 0;
 		memset(&cache->origin, 0, sizeof(ccv_cache_index_t));
 	}
+	
+	pthread_rwlock_unlock(cache->cache_rwlock);
 }
 
 void ccv_cache_close(ccv_cache_t* cache)
 {
-	// for radix-tree based cache, close/cleanup are the same (it is not the same for cuckoo based one,
-	// because for cuckoo based one, it will free up space in close whereas only cleanup space in cleanup
+	// for radix-tree based cache, close/cleanup are similar (it is not the same for cuckoo based one,
+	// because for cuckoo based one, it will free up space in close whereas only cleanup space in cleanup.
+	// However, pthread resources need to be released in close.
 	ccv_cache_cleanup(cache);
+	if (cache->cache_rwlock) {
+		pthread_rwlock_destroy(cache->cache_rwlock);
+		free(cache->cache_rwlock);
+		cache->cache_rwlock = NULL;
+	}
 }

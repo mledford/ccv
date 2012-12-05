@@ -20,6 +20,8 @@
 #include <assert.h>
 #include <alloca.h>
 
+#include <pthread.h>
+
 #define CCV_PI (3.141592653589793)
 #define ccmalloc malloc
 #define ccrealloc realloc
@@ -153,6 +155,7 @@ typedef union {
 } ccv_cache_index_t;
 
 typedef struct {
+	pthread_rwlock_t *cache_rwlock;
 	ccv_cache_index_t origin;
 	uint32_t rnum;
 	uint32_t age;
