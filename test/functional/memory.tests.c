@@ -34,11 +34,16 @@ TEST_CASE("random cache put/delete/get")
 	uint64_t* sigs = ccmalloc(sizeof(uint64_t) * N);
 	void** mems = ccmalloc(sizeof(void*) * N);
 	uint8_t* deleted = ccmalloc(sizeof(uint8_t) * N);
+
+	// rand() is not thread safe so we will generate
+	// all the unique signatures up front.
+	for (int i = 0; i < N; i++) {
+		sigs[i] = uniqid();
+	}
 	
 	dispatch_queue_t global_queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
 	size_t iterations = N;
     dispatch_apply(iterations, global_queue, ^(size_t i) {
-		sigs[i] = uniqid();
 		mems[i] = ccmalloc(1);
 		ccv_cache_put(&cache, sigs[i], mems[i], 1, 0);
     });	
