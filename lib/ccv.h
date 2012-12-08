@@ -143,11 +143,13 @@ typedef void(*ccv_cache_index_free_f)(void*);
 
 typedef union {
 	struct {
+		uint64_t parent;
 		uint64_t bitmap;
 		uint64_t set;
 		uint64_t age;
 	} branch;
 	struct {
+		uint64_t parent;
 		uint64_t sign;
 		uint64_t off;
 		uint64_t type;
